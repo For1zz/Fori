@@ -72,56 +72,86 @@ async function showMenu(chatId) {
 }
 
 async function showSchedule(chatId, day) {
-  const { data, error } = await supabase
-    .from('schedule')
-    .select('*')
-    .eq('group_name', 'ПО-42')
-    .eq('day_of_week', day)
-    .order('lesson_number');
+  try {
+    const { data, error } = await supabase
+      .from('schedule')
+      .select('*')
+      .eq('group_name', 'ПО-42')
+      .eq('day_of_week', day)
+      .order('lesson_number');
 
-  if (error) {
-    console.error('Supabase error:', error);
-    await sendMessage(chatId, '❌ Ошибка загрузки расписания.');
-    return;
-  }
+    // ВЫВОД НАСТОЯЩЕЙ ОШИБКИ
+    if (error) {
+      console.error('Supabase error:', error);
 
-  const dayName = DAYS[day] || day;
+      await sendMessage(
+        chatId,
+        `❌ Ошибка базы данных:\n\n` +
+        `Сообщение: ${error.message}\n` +
+        `Код: ${error.code || 'не указан'}\n` +
+        `Подробности: ${error.details || 'нет'}\n` +
+        `Подсказка: ${error.hint || 'нет'}`
+      );
 
-  if (!data || data.length === 0) {
+      return;
+    }
+
+    const dayName = DAYS[day] || day;
+
+    if (!data || data.length === 0) {
+      await sendMessage(
+        chatId,
+        `📅 ${dayName}\n\nНа этот день занятий нет.`,
+        [
+          [
+            { text: '⬅️ Выбрать другой день', callback_data: 'menu' }
+          ]
+        ]
+      );
+
+      return;
+    }
+
+    let reply = `📚 Расписание ПО-42\n📅 ${dayName}\n\n`;
+
+    for (const lesson of data) {
+      reply += `${lesson.lesson_number}. ${lesson.subject_name}\n`;
+
+      if (lesson.start_time && lesson.end_time) {
+        reply += `⏰ ${lesson.start_time} – ${lesson.end_time}\n`;
+      } else if (lesson.start_time) {
+        reply += `⏰ ${lesson.start_time}\n`;
+      }
+
+      if (lesson.room) {
+        reply += `🏫 Кабинет: ${lesson.room}\n`;
+      }
+
+      if (lesson.teacher_name) {
+        reply += `👨‍🏫 ${lesson.teacher_name}\n`;
+      }
+
+      reply += '\n';
+    }
+
     await sendMessage(
       chatId,
-      `📅 ${dayName}\n\nНа этот день занятий нет.`
+      reply,
+      [
+        [
+          { text: '⬅️ Выбрать другой день', callback_data: 'menu' }
+        ]
+      ]
     );
-    return;
+
+  } catch (error) {
+    console.error('Unexpected error:', error);
+
+    await sendMessage(
+      chatId,
+      `❌ Ошибка программы:\n${error.message || error}`
+    );
   }
-
-  let reply = `📚 Расписание ПО-42\n📅 ${dayName}\n\n`;
-
-  for (const lesson of data) {
-    reply += `${lesson.lesson_number}. ${lesson.subject_name}\n`;
-
-    if (lesson.start_time && lesson.end_time) {
-      reply += `⏰ ${lesson.start_time} – ${lesson.end_time}\n`;
-    } else if (lesson.start_time) {
-      reply += `⏰ ${lesson.start_time}\n`;
-    }
-
-    if (lesson.room) {
-      reply += `🏫 Кабинет: ${lesson.room}\n`;
-    }
-
-    if (lesson.teacher_name) {
-      reply += `👨‍🏫 ${lesson.teacher_name}\n`;
-    }
-
-    reply += '\n';
-  }
-
-  const keyboard = [
-    [{ text: '⬅️ Выбрать другой день', callback_data: 'menu' }]
-  ];
-
-  await sendMessage(chatId, reply, keyboard);
 }
 
 function getToday() {
@@ -150,25 +180,21 @@ export default async function handler(req, res) {
   try {
     const update = req.body;
 
-    // Обработка обычных сообщений
+    // Обычные сообщения
     if (update.message) {
       const chatId = update.message.chat.id;
       const text = update.message.text || '';
 
-      if (text === '/start') {
+      if (text === '/start' || text === '/schedule') {
         await showMenu(chatId);
       }
 
       if (text === '/today') {
         await showSchedule(chatId, getToday());
       }
-
-      if (text === '/schedule') {
-        await showMenu(chatId);
-      }
     }
 
-    // Обработка нажатий на кнопки
+    // Нажатия на кнопки
     if (update.callback_query) {
       const callback = update.callback_query;
       const chatId = callback.message.chat.id;
@@ -193,8 +219,9 @@ export default async function handler(req, res) {
     }
 
     return res.status(200).json({ ok: true });
+
   } catch (error) {
-    console.error('Bot error:', error);
+    console.error('Webhook error:', error);
     return res.status(200).json({ ok: true });
   }
 }
