@@ -8,15 +8,134 @@ const supabase = createClient(
 
 const TELEGRAM_TOKEN = process.env.BOT_TOKEN;
 
-async function sendMessage(chatId, text) {
-  await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text: text
-    })
-  });
+const DAYS = {
+  Monday: 'Понедельник',
+  Tuesday: 'Вторник',
+  Wednesday: 'Среда',
+  Thursday: 'Четверг',
+  Friday: 'Пятница',
+  Saturday: 'Суббота',
+  Sunday: 'Воскресенье'
+};
+
+async function telegram(method, body) {
+  const response = await fetch(
+    `https://api.telegram.org/bot${TELEGRAM_TOKEN}/${method}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }
+  );
+
+  return response.json();
+}
+
+async function sendMessage(chatId, text, keyboard = null) {
+  const body = {
+    chat_id: chatId,
+    text
+  };
+
+  if (keyboard) {
+    body.reply_markup = {
+      inline_keyboard: keyboard
+    };
+  }
+
+  return telegram('sendMessage', body);
+}
+
+async function showMenu(chatId) {
+  const keyboard = [
+    [
+      { text: '📅 Понедельник', callback_data: 'day_Monday' },
+      { text: '📅 Вторник', callback_data: 'day_Tuesday' }
+    ],
+    [
+      { text: '📅 Среда', callback_data: 'day_Wednesday' },
+      { text: '📅 Четверг', callback_data: 'day_Thursday' }
+    ],
+    [
+      { text: '📅 Пятница', callback_data: 'day_Friday' }
+    ],
+    [
+      { text: '📍 Сегодня', callback_data: 'today' }
+    ]
+  ];
+
+  await sendMessage(
+    chatId,
+    '📚 Расписание ПО-42\n\nВыбери день недели:',
+    keyboard
+  );
+}
+
+async function showSchedule(chatId, day) {
+  const { data, error } = await supabase
+    .from('schedule')
+    .select('*')
+    .eq('group_name', 'ПО-42')
+    .eq('day_of_week', day)
+    .order('lesson_number');
+
+  if (error) {
+    console.error('Supabase error:', error);
+    await sendMessage(chatId, '❌ Ошибка загрузки расписания.');
+    return;
+  }
+
+  const dayName = DAYS[day] || day;
+
+  if (!data || data.length === 0) {
+    await sendMessage(
+      chatId,
+      `📅 ${dayName}\n\nНа этот день занятий нет.`
+    );
+    return;
+  }
+
+  let reply = `📚 Расписание ПО-42\n📅 ${dayName}\n\n`;
+
+  for (const lesson of data) {
+    reply += `${lesson.lesson_number}. ${lesson.subject_name}\n`;
+
+    if (lesson.start_time && lesson.end_time) {
+      reply += `⏰ ${lesson.start_time} – ${lesson.end_time}\n`;
+    } else if (lesson.start_time) {
+      reply += `⏰ ${lesson.start_time}\n`;
+    }
+
+    if (lesson.room) {
+      reply += `🏫 Кабинет: ${lesson.room}\n`;
+    }
+
+    if (lesson.teacher_name) {
+      reply += `👨‍🏫 ${lesson.teacher_name}\n`;
+    }
+
+    reply += '\n';
+  }
+
+  const keyboard = [
+    [{ text: '⬅️ Выбрать другой день', callback_data: 'menu' }]
+  ];
+
+  await sendMessage(chatId, reply, keyboard);
+}
+
+function getToday() {
+  const days = [
+    'Sunday',
+    'Monday',
+    'Tuesday',
+    'Wednesday',
+    'Thursday',
+    'Friday',
+    'Saturday'
+  ];
+
+  return days[new Date().getDay()];
 }
 
 export default async function handler(req, res) {
@@ -31,65 +150,51 @@ export default async function handler(req, res) {
   try {
     const update = req.body;
 
-    if (!update?.message) {
-      return res.status(200).json({ ok: true });
+    // Обработка обычных сообщений
+    if (update.message) {
+      const chatId = update.message.chat.id;
+      const text = update.message.text || '';
+
+      if (text === '/start') {
+        await showMenu(chatId);
+      }
+
+      if (text === '/today') {
+        await showSchedule(chatId, getToday());
+      }
+
+      if (text === '/schedule') {
+        await showMenu(chatId);
+      }
     }
 
-    const chatId = update.message.chat.id;
-    const text = update.message.text || '';
+    // Обработка нажатий на кнопки
+    if (update.callback_query) {
+      const callback = update.callback_query;
+      const chatId = callback.message.chat.id;
+      const action = callback.data;
 
-    if (text === '/start') {
-      await sendMessage(
-        chatId,
-        'Привет! Я бот расписания.\n\nНапиши /today, чтобы посмотреть расписание на сегодня.'
-      );
-    }
+      await telegram('answerCallbackQuery', {
+        callback_query_id: callback.id
+      });
 
-    if (text === '/today') {
-      const days = [
-        'Sunday',
-        'Monday',
-        'Tuesday',
-        'Wednesday',
-        'Thursday',
-        'Friday',
-        'Saturday'
-      ];
-
-      const today = days[new Date().getDay()];
-
-      const { data, error } = await supabase
-        .from('schedule')
-        .select('*')
-        .eq('day_of_week', today)
-        .order('lesson_number');
-
-      if (error) {
-        await sendMessage(chatId, 'Ошибка загрузки расписания.');
-        return res.status(200).json({ ok: true });
+      if (action === 'menu') {
+        await showMenu(chatId);
       }
 
-      if (!data || data.length === 0) {
-        await sendMessage(chatId, 'На сегодня занятий нет.');
-        return res.status(200).json({ ok: true });
+      if (action === 'today') {
+        await showSchedule(chatId, getToday());
       }
 
-      let reply = '📚 Расписание на сегодня:\n\n';
-
-      for (const lesson of data) {
-        reply += `${lesson.lesson_number}. ${lesson.subject_name}\n`;
-        if (lesson.start_time) reply += `⏰ ${lesson.start_time}`;
-        if (lesson.room) reply += ` | Кабинет: ${lesson.room}`;
-        if (lesson.teacher_name) reply += `\n👨‍🏫 ${lesson.teacher_name}`;
-        reply += '\n\n';
+      if (action.startsWith('day_')) {
+        const day = action.replace('day_', '');
+        await showSchedule(chatId, day);
       }
-
-      await sendMessage(chatId, reply);
     }
 
     return res.status(200).json({ ok: true });
   } catch (error) {
-    console.error(error);
+    console.error('Bot error:', error);
     return res.status(200).json({ ok: true });
   }
 }
