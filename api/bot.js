@@ -43,6 +43,7 @@ async function sendMessage(chatId, text, keyboard = null) {
   return telegram('sendMessage', body);
 }
 
+// МЕНЮ
 async function showMenu(chatId) {
   const keyboard = [
     [
@@ -69,6 +70,7 @@ async function showMenu(chatId) {
   );
 }
 
+// РАСПИСАНИЕ НА ДЕНЬ
 async function showSchedule(chatId, day) {
   try {
     const { data, error } = await supabase
@@ -79,13 +81,8 @@ async function showSchedule(chatId, day) {
       .order('lesson_number');
 
     if (error) {
-      console.error('Supabase error:', error);
-
-      await sendMessage(
-        chatId,
-        `❌ Ошибка базы данных:\n${error.message}`
-      );
-
+      console.error(error);
+      await sendMessage(chatId, `❌ Ошибка базы:\n${error.message}`);
       return;
     }
 
@@ -133,25 +130,19 @@ async function showSchedule(chatId, day) {
 
   } catch (error) {
     console.error(error);
-
-    await sendMessage(
-      chatId,
-      `❌ Ошибка программы:\n${error.message}`
-    );
+    await sendMessage(chatId, `❌ Ошибка:\n${error.message}`);
   }
 }
 
-// Получаем дату и время Казахстана
+// ВРЕМЯ КАЗАХСТАНА
 function getKazakhstanTime() {
-  const now = new Date();
-
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: 'Asia/Almaty',
     weekday: 'long',
     hour: '2-digit',
     minute: '2-digit',
     hourCycle: 'h23'
-  }).formatToParts(now);
+  }).formatToParts(new Date());
 
   const values = {};
 
@@ -170,13 +161,11 @@ function formatMinutes(minutes) {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
 
-  if (h > 0) {
-    return `${h} ч. ${m} мин.`;
-  }
-
+  if (h > 0) return `${h} ч. ${m} мин.`;
   return `${m} мин.`;
 }
 
+// ФУНКЦИЯ СЕЙЧАС
 async function showNow(chatId) {
   try {
     const current = getKazakhstanTime();
@@ -191,13 +180,7 @@ async function showNow(chatId) {
       .order('lesson_number');
 
     if (error) {
-      console.error(error);
-
-      await sendMessage(
-        chatId,
-        `❌ Ошибка базы данных:\n${error.message}`
-      );
-
+      await sendMessage(chatId, `❌ Ошибка базы:\n${error.message}`);
       return;
     }
 
@@ -224,27 +207,12 @@ async function showNow(chatId) {
       }))
       .sort((a, b) => a.start - b.start);
 
-    if (lessons.length === 0) {
-      await sendMessage(
-        chatId,
-        '❌ Для сегодняшних занятий не указано время.',
-        [[
-          { text: '⬅️ Меню', callback_data: 'menu' }
-        ]]
-      );
-
-      return;
-    }
-
-    // Ищем текущую пару
     const currentLesson = lessons.find(
       lesson => currentMinutes >= lesson.start &&
                 currentMinutes < lesson.end
     );
 
     if (currentLesson) {
-      const remaining = currentLesson.end - currentMinutes;
-
       let reply = `🔴 СЕЙЧАС ИДЁТ ПАРА\n\n`;
       reply += `📅 ${DAYS[day]}\n`;
       reply += `${currentLesson.lesson_number}. ${currentLesson.subject_name}\n`;
@@ -258,27 +226,20 @@ async function showNow(chatId) {
         reply += `👨‍🏫 ${currentLesson.teacher_name}\n`;
       }
 
-      reply += `\n⏳ До конца: ${formatMinutes(remaining)}`;
+      reply += `\n⏳ До конца: ${formatMinutes(currentLesson.end - currentMinutes)}`;
 
-      await sendMessage(
-        chatId,
-        reply,
-        [[
-          { text: '⬅️ Меню', callback_data: 'menu' }
-        ]]
-      );
+      await sendMessage(chatId, reply, [[
+        { text: '⬅️ Меню', callback_data: 'menu' }
+      ]]);
 
       return;
     }
 
-    // Ищем следующую пару
     const nextLesson = lessons.find(
       lesson => lesson.start > currentMinutes
     );
 
     if (nextLesson) {
-      const wait = nextLesson.start - currentMinutes;
-
       let reply = `🟡 ПЕРЕМЕНА\n\n`;
       reply += `📅 ${DAYS[day]}\n`;
       reply += `Следующая пара:\n\n`;
@@ -293,20 +254,15 @@ async function showNow(chatId) {
         reply += `👨‍🏫 ${nextLesson.teacher_name}\n`;
       }
 
-      reply += `\n⏳ До начала: ${formatMinutes(wait)}`;
+      reply += `\n⏳ До начала: ${formatMinutes(nextLesson.start - currentMinutes)}`;
 
-      await sendMessage(
-        chatId,
-        reply,
-        [[
-          { text: '⬅️ Меню', callback_data: 'menu' }
-        ]]
-      );
+      await sendMessage(chatId, reply, [[
+        { text: '⬅️ Меню', callback_data: 'menu' }
+      ]]);
 
       return;
     }
 
-    // Если все пары закончились
     await sendMessage(
       chatId,
       `🟢 НА СЕГОДНЯ ВСЁ!\n\n📅 ${DAYS[day]}\n\nВсе занятия завершены.`,
@@ -316,19 +272,66 @@ async function showNow(chatId) {
     );
 
   } catch (error) {
-    console.error('Now error:', error);
+    console.error(error);
+    await sendMessage(chatId, `❌ Ошибка:\n${error.message}`);
+  }
+}
+
+// ПОДПИСКА
+async function subscribe(chatId) {
+  const { error } = await supabase
+    .from('bot_subscribers')
+    .upsert(
+      {
+        chat_id: chatId,
+        group_name: 'ПО-42'
+      },
+      { onConflict: 'chat_id' }
+    );
+
+  if (error) {
+    console.error('Subscription error:', error);
 
     await sendMessage(
       chatId,
-      `❌ Ошибка:\n${error.message}`
+      `❌ Не удалось оформить подписку.\n${error.message}`
     );
+
+    return false;
   }
+
+  return true;
+}
+
+// ОТМЕНА ПОДПИСКИ
+async function unsubscribe(chatId) {
+  const { error } = await supabase
+    .from('bot_subscribers')
+    .delete()
+    .eq('chat_id', chatId);
+
+  if (error) {
+    console.error('Unsubscribe error:', error);
+
+    await sendMessage(
+      chatId,
+      `❌ Не удалось отключить уведомления.\n${error.message}`
+    );
+
+    return;
+  }
+
+  await sendMessage(
+    chatId,
+    '🔕 Утренние уведомления отключены.\n\nЧтобы снова подписаться, напиши /start.'
+  );
 }
 
 function getToday() {
   return getKazakhstanTime().day;
 }
 
+// WEBHOOK
 export default async function handler(req, res) {
   if (req.method === 'GET') {
     return res.status(200).send('Bot webhook is active');
@@ -341,12 +344,30 @@ export default async function handler(req, res) {
   try {
     const update = req.body;
 
+    // СООБЩЕНИЯ
     if (update.message) {
       const chatId = update.message.chat.id;
       const text = update.message.text || '';
 
-      if (text === '/start' || text === '/schedule') {
+      if (text === '/start') {
+        const success = await subscribe(chatId);
+
+        if (success) {
+          await sendMessage(
+            chatId,
+            '🔔 Ты подписан на утреннее расписание в 07:00 по времени Казахстана.\n\nОтключить уведомления: /stop'
+          );
+        }
+
         await showMenu(chatId);
+      }
+
+      if (text === '/schedule') {
+        await showMenu(chatId);
+      }
+
+      if (text === '/stop') {
+        await unsubscribe(chatId);
       }
 
       if (text === '/today') {
@@ -358,6 +379,7 @@ export default async function handler(req, res) {
       }
     }
 
+    // КНОПКИ
     if (update.callback_query) {
       const callback = update.callback_query;
       const chatId = callback.message.chat.id;
